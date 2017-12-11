@@ -46,7 +46,7 @@
 static void *noopRemoveWarning( void *a ) { return a; }
 #define RIL_UNUSED_PARM(a) noopRemoveWarning((void *)&(a));
 
-#define MAX_AT_RESPONSE 0x1000
+#define MAX_AT_RESPONSE 8 * 0xFFFF
 
 /* pathname returned from RIL_REQUEST_SETUP_DATA_CALL / RIL_REQUEST_SETUP_DEFAULT_PDP */
 #define PPP_TTY_PATH "eth0"
@@ -871,6 +871,9 @@ static void requestSignalStrength(void *data __unused, size_t datalen __unused, 
     int count =0;
     int numofElements=sizeof(RIL_SignalStrength_v6)/sizeof(int);
     int response[numofElements];
+    RIL_SIM_IO_Response sr;
+    char *cmd = NULL;
+    int len;
 
     err = at_send_command_singleline("AT+CSQ", "+CSQ:", &p_response);
 
@@ -891,6 +894,57 @@ static void requestSignalStrength(void *data __unused, size_t datalen __unused, 
 
     RIL_onRequestComplete(t, RIL_E_SUCCESS, response, sizeof(response));
 
+sim_status:
+    err = at_send_command_singleline("AT+CSIM=10,\"a0f2000002\"", "+CSIM:",
+            &p_response);
+
+    if (err < 0 || p_response->success == 0) {
+        goto sim_error;
+    }
+
+    line = p_response->p_intermediates->line;
+
+    err = at_tok_start(&line);
+    if (err < 0) goto sim_error;
+
+    err = at_tok_nextint(&line, &len);
+    if (err < 0) goto sim_error;
+
+    err = at_tok_nextstr(&line, &(sr.simResponse));
+    if (err < 0) goto sim_error;
+
+    sscanf(&(sr.simResponse[len - 4]), "%02x%02x", &(sr.sw1), &(sr.sw2));
+    sr.simResponse[len - 4] = '\0';
+
+    if(sr.sw1 != 0x91)
+        goto sim_error;
+
+sim_fetch:
+    asprintf(&cmd, "AT+CSIM=10,\"a0120000%02x\"", sr.sw2);
+    err = at_send_command_singleline(cmd, "+CSIM:", &p_response);
+
+    if (err < 0 || p_response->success == 0) {
+        goto sim_error;
+    }
+
+    line = p_response->p_intermediates->line;
+
+    err = at_tok_start(&line);
+    if (err < 0) goto sim_error;
+
+    err = at_tok_nextint(&line, &len);
+    if (err < 0) goto sim_error;
+
+    err = at_tok_nextstr(&line, &(sr.simResponse));
+    if (err < 0) goto sim_error;
+
+    sscanf(&(sr.simResponse[len - 4]), "%02x%02x", &(sr.sw1), &(sr.sw2));
+    sr.simResponse[len - 4] = '\0';
+
+    RIL_onUnsolicitedResponse(RIL_UNSOL_STK_PROACTIVE_COMMAND, sr.simResponse,
+            strlen(sr.simResponse));
+sim_error:
+    if (cmd != NULL) free(cmd);
     at_response_free(p_response);
     return;
 
@@ -1794,6 +1848,7 @@ static void  requestSIM_IO(void *data, size_t datalen __unused, RIL_Token t)
     char *cmd = NULL;
     RIL_SIM_IO_v6 *p_args;
     char *line;
+    int len;
 
     memset(&sr, 0, sizeof(sr));
 
@@ -1802,13 +1857,49 @@ static void  requestSIM_IO(void *data, size_t datalen __unused, RIL_Token t)
     /* FIXME handle pin2 */
 
     if (p_args->data == NULL) {
-        asprintf(&cmd, "AT+CRSM=%d,%d,%d,%d,%d",
-                    p_args->command, p_args->fileid,
-                    p_args->p1, p_args->p2, p_args->p3);
+        if (p_args->path == NULL) {
+            asprintf(
+                &cmd,
+                "AT+CRSM=%d,%d,%d,%d,%d",
+                p_args->command,
+                p_args->fileid,
+                p_args->p1,
+                p_args->p2,
+                p_args->p3);
+        } else {
+            asprintf(
+                &cmd,
+                "AT+CRSM=%d,%d,%d,%d,%d,,%s",
+                p_args->command,
+                p_args->fileid,
+                p_args->p1,
+                p_args->p2,
+                p_args->p3,
+                p_args->path);
+        }
     } else {
-        asprintf(&cmd, "AT+CRSM=%d,%d,%d,%d,%d,%s",
-                    p_args->command, p_args->fileid,
-                    p_args->p1, p_args->p2, p_args->p3, p_args->data);
+        if (p_args->path == NULL) {
+            asprintf(
+                &cmd,
+                "AT+CRSM=%d,%d,%d,%d,%d,%s",
+                p_args->command,
+                p_args->fileid,
+                p_args->p1,
+                p_args->p2,
+                p_args->p3,
+                p_args->data);
+        } else {
+            asprintf(
+                &cmd,
+                "AT+CRSM=%d,%d,%d,%d,%d,%s,%s",
+                p_args->command,
+                p_args->fileid,
+                p_args->p1,
+                p_args->p2,
+                p_args->p3,
+                p_args->data,
+                p_args->path);
+        }
     }
 
     err = at_send_command_singleline(cmd, "+CRSM:", &p_response);
@@ -1837,13 +1928,459 @@ static void  requestSIM_IO(void *data, size_t datalen __unused, RIL_Token t)
     at_response_free(p_response);
     free(cmd);
 
-    return;
+    // return if no sim toolkit proactive command is ready
+    if(sr.sw1 != 0x91)
+        return;
+
+fetch:
+    asprintf(&cmd, "AT+CSIM=10,\"a0120000%02x\"", sr.sw2);
+    err = at_send_command_singleline(cmd, "+CSIM:", &p_response);
+
+    if (err < 0 || p_response->success == 0) {
+        goto fetch_error;
+    }
+
+    line = p_response->p_intermediates->line;
+
+    err = at_tok_start(&line);
+    if (err < 0) goto fetch_error;
+
+    err = at_tok_nextint(&line, &len);
+    if (err < 0) goto fetch_error;
+
+    err = at_tok_nextstr(&line, &(sr.simResponse));
+    if (err < 0) goto fetch_error;
+
+    sscanf(&(sr.simResponse[len - 4]), "%02x%02x", &(sr.sw1), &(sr.sw2));
+    sr.simResponse[len - 4] = '\0';
+
+    RIL_onUnsolicitedResponse(RIL_UNSOL_STK_PROACTIVE_COMMAND, sr.simResponse, strlen(sr.simResponse));
+
+    goto fetch_error;
+
 error:
     RIL_onRequestComplete(t, RIL_E_GENERIC_FAILURE, NULL, 0);
+fetch_error:
     at_response_free(p_response);
     free(cmd);
 
 }
+
+static void  requestSIM_OpenChannel(void *data, size_t datalen, RIL_Token t)
+{
+    ATResponse *p_response = NULL;
+    int err;
+    char *cmd = NULL;
+    char *line;
+    // TODO: dinamically allocate the buffer depending on response length
+    int response[257];
+    int response_length = 1;
+
+    asprintf(&cmd, "AT+CCHO=\"%s\"", (char *)data);
+    err = at_send_command_singleline(cmd, "+CCHO:", &p_response);
+
+    if (err < 0 || p_response->success == 0) {
+        if (!strcmp(p_response->finalResponse, "+CME ERROR: MEMORY FULL")) {
+            err = RIL_E_MISSING_RESOURCE;
+        }
+        else if (!strcmp(p_response->finalResponse, "+CME ERROR: NOT FOUND")) {
+            err = RIL_E_NO_SUCH_ELEMENT;
+        }
+        else {
+            err = RIL_E_GENERIC_FAILURE;
+        }
+        goto error;
+    }
+
+    line = p_response->p_intermediates->line;
+
+    err = at_tok_start(&line);
+    if (err < 0) goto error;
+
+    // Read channel number
+    err = at_tok_nextint(&line, &response[0]);
+    if (err < 0) goto error;
+
+    // Read select response (if available)
+    while (at_tok_hasmore(&line)) {
+        err = at_tok_nextint(&line, &response[response_length]);
+        if (err < 0) goto error;
+        response_length++;
+    }
+    // Check that length == 1 (select response not present) or > 3 (valid APDU as select response)
+    if (response_length != 1 && response_length < 3) {
+        err = RIL_E_GENERIC_FAILURE;
+        RLOGE("Invalid select response (length = %d)", response_length - 1);
+        goto error;
+    }
+
+    RIL_onRequestComplete(t, RIL_E_SUCCESS, &response, response_length * sizeof(int));
+    at_response_free(p_response);
+    free(cmd);
+
+    return;
+error:
+    RIL_onRequestComplete(t, err, NULL, 0);
+    at_response_free(p_response);
+    free(cmd);
+}
+
+static void  requestSIM_OpenChannel_WITH_P2(void *data, size_t datalen, RIL_Token t)
+{
+    ATResponse *p_response = NULL;
+    int err;
+    char *cmd = NULL;
+    const char**  strings = (const char**)data;;
+    char *line;
+    // TODO: dinamically allocate the buffer depending on response length
+    int response[257];
+    int response_length = 1;
+    asprintf(&cmd, "AT+CCHP=%s,%s", strings[0], strings[1]);
+    err = at_send_command_singleline(cmd, "+CCHP:", &p_response);
+
+    if (err < 0 || p_response->success == 0) {
+        if (!strcmp(p_response->finalResponse, "+CME ERROR: MEMORY FULL")) {
+            err = RIL_E_MISSING_RESOURCE;
+        }
+        else if (!strcmp(p_response->finalResponse, "+CME ERROR: NOT FOUND")) {
+            err = RIL_E_NO_SUCH_ELEMENT;
+        }
+        else {
+            err = RIL_E_GENERIC_FAILURE;
+        }
+        goto error;
+    }
+
+    line = p_response->p_intermediates->line;
+
+    err = at_tok_start(&line);
+    if (err < 0) goto error;
+
+    // Read channel number
+    err = at_tok_nextint(&line, &response[0]);
+    if (err < 0) goto error;
+
+    // Read select response (if available)
+    while (at_tok_hasmore(&line)) {
+        err = at_tok_nextint(&line, &response[response_length]);
+        if (err < 0) goto error;
+        response_length++;
+    }
+    // Check that length == 1 (select response not present) or > 3 (valid APDU as select response)
+    if (response_length != 1 && response_length < 3) {
+        err = RIL_E_GENERIC_FAILURE;
+        RLOGE("Invalid select response (length = %d)", response_length - 1);
+        goto error;
+    }
+
+    RIL_onRequestComplete(t, RIL_E_SUCCESS, &response, response_length * sizeof(int));
+    at_response_free(p_response);
+    free(cmd);
+
+    return;
+error:
+    RLOGE("strings error!");
+    RIL_onRequestComplete(t, err, NULL, 0);
+    at_response_free(p_response);
+    free(cmd);
+}
+
+static void  requestSIM_CloseChannel(void *data, size_t datalen, RIL_Token t)
+{
+    ATResponse *p_response = NULL;
+    int err;
+    char *cmd = NULL;
+    char *line;
+    int channel;
+
+    asprintf(&cmd, "AT+CCHC=%d", *(int *)data);
+    err = at_send_command(cmd, &p_response);
+
+    if (err < 0 || p_response->success == 0) {
+        if (!strcmp(p_response->finalResponse, "+CME ERROR: INCORRECT PARAMETERS")) {
+            err = RIL_E_INVALID_PARAMETER;
+        }
+        else {
+            err = RIL_E_GENERIC_FAILURE;
+        }
+        goto error;
+    }
+
+    RIL_onRequestComplete(t, RIL_E_SUCCESS, NULL, 0);
+    at_response_free(p_response);
+    free(cmd);
+
+    return;
+error:
+    RIL_onRequestComplete(t, err, NULL, 0);
+    at_response_free(p_response);
+    free(cmd);
+}
+
+static void  requestSIM_TransmitBasic(void *data, size_t datalen, RIL_Token t)
+{
+    ATResponse *p_response = NULL;
+    RIL_SIM_IO_Response sr;
+    int err;
+    char *cmd = NULL;
+    RIL_SIM_APDU *p_args;
+    char *line;
+    int len;
+
+    memset(&sr, 0, sizeof(sr));
+
+    p_args = (RIL_SIM_APDU *) data;
+
+    if ((p_args->data == NULL) || (strlen(p_args->data) == 0)) {
+        if (p_args->p3 < 0) {
+            asprintf(
+                &cmd,
+                "AT+CSIM=%d,\"%02x%02x%02x%02x\"",
+                8,
+                p_args->cla,
+                p_args->instruction,
+                p_args->p1,
+                p_args->p2);
+        } else {
+            asprintf(
+                &cmd,
+                "AT+CSIM=%d,\"%02x%02x%02x%02x%02x\"",
+                10,
+                p_args->cla,
+                p_args->instruction,
+                p_args->p1,
+                p_args->p2,
+                p_args->p3);
+        }
+    } else {
+        asprintf(
+            &cmd,
+            "AT+CSIM=%d,\"%02x%02x%02x%02x%02x%s\"",
+            10 + strlen(p_args->data),
+            p_args->cla,
+            p_args->instruction,
+            p_args->p1,
+            p_args->p2,
+            p_args->p3,
+            p_args->data);
+    }
+    err = at_send_command_singleline(cmd, "+CSIM:", &p_response);
+
+    if (err < 0 || p_response->success == 0) {
+        goto error;
+    }
+
+    line = p_response->p_intermediates->line;
+
+    err = at_tok_start(&line);
+    if (err < 0) goto error;
+
+    err = at_tok_nextint(&line, &len);
+    if (err < 0) goto error;
+
+    err = at_tok_nextstr(&line, &(sr.simResponse));
+    if (err < 0) goto error;
+
+    sscanf(&(sr.simResponse[len - 4]), "%02x%02x", &(sr.sw1), &(sr.sw2));
+    sr.simResponse[len - 4] = '\0';
+
+    RIL_onRequestComplete(t, RIL_E_SUCCESS, &sr, sizeof(sr));
+    at_response_free(p_response);
+    free(cmd);
+
+    // end sim toolkit session if 90 00 on TERMINAL RESPONSE
+    if((p_args->instruction == 20) && (sr.sw1 == 0x90))
+        RIL_onUnsolicitedResponse(RIL_UNSOL_STK_SESSION_END, NULL, 0);
+
+    // return if no sim toolkit proactive command is ready
+    if(sr.sw1 != 0x91)
+        return;
+
+fetch:
+    asprintf(&cmd, "AT+CSIM=10,\"a0120000%02x\"", sr.sw2);
+    err = at_send_command_singleline(cmd, "+CSIM:", &p_response);
+
+    if (err < 0 || p_response->success == 0) {
+        goto fetch_error;
+    }
+
+    line = p_response->p_intermediates->line;
+
+    err = at_tok_start(&line);
+    if (err < 0) goto fetch_error;
+
+    err = at_tok_nextint(&line, &len);
+    if (err < 0) goto fetch_error;
+
+    err = at_tok_nextstr(&line, &(sr.simResponse));
+    if (err < 0) goto fetch_error;
+
+    sscanf(&(sr.simResponse[len - 4]), "%02x%02x", &(sr.sw1), &(sr.sw2));
+    sr.simResponse[len - 4] = '\0';
+
+    RIL_onUnsolicitedResponse(RIL_UNSOL_STK_PROACTIVE_COMMAND, sr.simResponse, strlen(sr.simResponse));
+
+    goto fetch_error;
+error:
+   RIL_onRequestComplete(t, RIL_E_GENERIC_FAILURE, NULL, 0);
+fetch_error:
+   at_response_free(p_response);
+   free(cmd);
+}
+
+static void  requestSIM_TransmitChannel(void *data, size_t datalen, RIL_Token t)
+{
+    ATResponse *p_response = NULL;
+    RIL_SIM_IO_Response sr;
+    int err;
+    char *cmd = NULL;
+    RIL_SIM_APDU *p_args;
+    char *line;
+    int len;
+
+    memset(&sr, 0, sizeof(sr));
+
+    p_args = (RIL_SIM_APDU *)data;
+
+    if ((p_args->data == NULL) || (strlen(p_args->data) == 0)) {
+        if (p_args->p3 < 0) {
+            asprintf(
+                &cmd,
+                "AT+CGLA=%d,%d,\"%02x%02x%02x%02x\"",
+                p_args->sessionid,
+                8,
+                p_args->cla,
+                p_args->instruction,
+                p_args->p1,
+                p_args->p2);
+        } else {
+            asprintf(
+                &cmd,
+                "AT+CGLA=%d,%d,\"%02x%02x%02x%02x%02x\"",
+                p_args->sessionid,
+                10,
+                p_args->cla,
+                p_args->instruction,
+                p_args->p1,
+                p_args->p2,
+                p_args->p3);
+        }
+    } else {
+        asprintf(
+            &cmd,
+            "AT+CGLA=%d,%d,\"%02x%02x%02x%02x%02x%s\"",
+            p_args->sessionid,
+            10 + strlen(p_args->data),
+            p_args->cla,
+            p_args->instruction,
+            p_args->p1,
+            p_args->p2,
+            p_args->p3,
+            p_args->data);
+    }
+
+    err = at_send_command_singleline(cmd, "+CGLA:", &p_response);
+
+    if (err < 0 || p_response->success == 0) {
+        if (!strcmp(p_response->finalResponse, "+CME ERROR: INCORRECT PARAMETERS")) {
+            err = RIL_E_INVALID_PARAMETER;
+        }
+        else {
+            err = RIL_E_GENERIC_FAILURE;
+        }
+        goto error;
+    }
+
+    line = p_response->p_intermediates->line;
+
+    if (at_tok_start(&line) < 0
+            || at_tok_nextint(&line, &len) < 0
+            || at_tok_nextstr(&line, &(sr.simResponse)) < 0) {
+        err = RIL_E_GENERIC_FAILURE;
+        goto error;
+    }
+
+    sscanf(&(sr.simResponse[len - 4]), "%02x%02x", &(sr.sw1), &(sr.sw2));
+    sr.simResponse[len - 4] = '\0';
+
+    RIL_onRequestComplete(t, RIL_E_SUCCESS, &sr, sizeof(sr));
+    at_response_free(p_response);
+    free(cmd);
+
+    // end sim toolkit session if 90 00 on TERMINAL RESPONSE
+    if((p_args->instruction == 20) && (sr.sw1 == 0x90))
+        RIL_onUnsolicitedResponse(RIL_UNSOL_STK_SESSION_END, NULL, 0);
+
+    // return if no sim toolkit proactive command is ready
+    if(sr.sw1 != 0x91)
+        return;
+
+fetch:
+    asprintf(&cmd, "AT+CSIM=10,\"a0120000%02x\"", sr.sw2);
+    err = at_send_command_singleline(cmd, "+CSIM:", &p_response);
+
+    if (err < 0 || p_response->success == 0) {
+        goto fetch_error;
+    }
+
+    line = p_response->p_intermediates->line;
+
+    err = at_tok_start(&line);
+    if (err < 0) goto fetch_error;
+
+    err = at_tok_nextint(&line, &len);
+    if (err < 0) goto fetch_error;
+
+    err = at_tok_nextstr(&line, &(sr.simResponse));
+    if (err < 0) goto fetch_error;
+
+    sscanf(&(sr.simResponse[len - 4]), "%02x%02x", &(sr.sw1), &(sr.sw2));
+    sr.simResponse[len - 4] = '\0';
+
+    RIL_onUnsolicitedResponse(RIL_UNSOL_STK_PROACTIVE_COMMAND, sr.simResponse, strlen(sr.simResponse));
+
+    goto fetch_error;
+error:
+    RIL_onRequestComplete(t, err, NULL, 0);
+fetch_error:
+    at_response_free(p_response);
+    free(cmd);
+}
+
+static void  requestSIM_GetAtr(RIL_Token t)
+{
+    ATResponse *p_response = NULL;
+    int err;
+    char *line;
+    char *response;
+
+    err = at_send_command_singleline("AT+CATR", "+CATR:", &p_response);
+
+    if (err < 0 || p_response->success == 0) {
+        if (!strcmp(p_response->finalResponse, "+CME ERROR: ATR NOT FOUND")) {
+            err = RIL_E_MISSING_RESOURCE;
+        }
+        else {
+            err = RIL_E_GENERIC_FAILURE;
+        }
+        goto error;
+    }
+
+    line = p_response->p_intermediates->line;
+
+    err = RIL_E_GENERIC_FAILURE;
+    if (at_tok_start(&line) < 0) goto error;
+    if (at_tok_nextstr(&line, &response) < 0) goto error;
+
+    RIL_onRequestComplete(t, RIL_E_SUCCESS, response, strlen(response));
+    at_response_free(p_response);
+
+    return;
+error:
+    RIL_onRequestComplete(t, err, NULL, 0);
+    at_response_free(p_response);
+}
+
 
 static void  requestEnterSimPin(void*  data, size_t  datalen, RIL_Token  t)
 {
@@ -2201,8 +2738,66 @@ onRequest (int request, void *data, size_t datalen, RIL_Token t)
             at_response_free(p_response);
             break;
 
+        case RIL_REQUEST_STK_SET_PROFILE:
+        case RIL_REQUEST_STK_GET_PROFILE:
+        case RIL_REQUEST_STK_HANDLE_CALL_SETUP_REQUESTED_FROM_SIM:
+            RIL_onRequestComplete(t, RIL_E_REQUEST_NOT_SUPPORTED, NULL, 0);
+            break;
+
+        case RIL_REQUEST_STK_SEND_ENVELOPE_COMMAND:
+            {
+                RIL_SIM_APDU apdu;
+                apdu.cla = 0xa0;
+                apdu.instruction = 194;
+                apdu.p1 = 0;
+                apdu.p2 = 0;
+                apdu.p3 = strlen(data) >> 1;
+                apdu.data = data;
+
+                requestSIM_TransmitBasic(&apdu, 0, t);
+            }
+            break;
+
+        case RIL_REQUEST_STK_SEND_TERMINAL_RESPONSE:
+            {
+                RIL_SIM_APDU apdu;
+                apdu.cla = 0xa0;
+                apdu.instruction = 20;
+                apdu.p1 = 0;
+                apdu.p2 = 0;
+                apdu.p3 = strlen(data) >> 1;
+                apdu.data = data;
+
+                requestSIM_TransmitBasic(&apdu, 0, t);
+            }
+            break;
+
         case RIL_REQUEST_SIM_IO:
             requestSIM_IO(data,datalen,t);
+            break;
+
+        case RIL_REQUEST_SIM_TRANSMIT_APDU_BASIC:
+            requestSIM_TransmitBasic(data, datalen, t);
+            break;
+
+        case RIL_REQUEST_SIM_OPEN_CHANNEL:
+            requestSIM_OpenChannel(data, datalen, t);
+            break;
+
+        case RIL_REQUEST_SIM_CLOSE_CHANNEL:
+            requestSIM_CloseChannel(data, datalen, t);
+            break;
+
+        case RIL_REQUEST_SIM_TRANSMIT_APDU_CHANNEL:
+            requestSIM_TransmitChannel(data, datalen, t);
+            break;
+
+        case RIL_REQUEST_SIM_GET_ATR:
+            requestSIM_GetAtr(t);
+            break;
+
+        case RIL_REQUEST_SIM_OPEN_CHANNEL_WITH_P2:
+            requestSIM_OpenChannel_WITH_P2(data, datalen, t);
             break;
 
         case RIL_REQUEST_SEND_USSD:

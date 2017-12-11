@@ -144,6 +144,8 @@
     {RIL_REQUEST_SET_DC_RT_INFO_RATE, dispatchInts, responseVoid},
     {RIL_REQUEST_SET_DATA_PROFILE, dispatchDataProfile, responseVoid},
     {RIL_REQUEST_SHUTDOWN, dispatchVoid, responseVoid},
+    {RIL_REQUEST_SIM_GET_ATR, dispatchVoid, responseString},
+    {RIL_REQUEST_SIM_OPEN_CHANNEL_WITH_P2, dispatchStrings, responseInts},
     {RIL_REQUEST_GET_RADIO_CAPABILITY, dispatchVoid, responseRadioCapability},
     {RIL_REQUEST_SET_RADIO_CAPABILITY, dispatchRadioCapability, responseRadioCapability},
     {RIL_REQUEST_START_LCE, dispatchInts, responseLceStatus},

@@ -70,7 +70,7 @@ namespace android {
 #define PROPERTY_RIL_IMPL "gsm.version.ril-impl"
 
 // match with constant in RIL.java
-#define MAX_COMMAND_BYTES (8 * 1024)
+#define MAX_COMMAND_BYTES (8 * 0xFFFF)
 
 // Basically: memset buffers that the client library
 // shouldn't be using anymore in an attempt to find
@@ -89,13 +89,13 @@ namespace android {
 #define RIL_ERRNO_INVALID_RESPONSE -1
 
 // request, response, and unsolicited msg print macro
-#define PRINTBUF_SIZE 8096
+#define PRINTBUF_SIZE 8 * 0xFFFF
 
 // Enable verbose logging
-#define VDBG 0
+#define VDBG 1
 
 // Enable RILC log
-#define RILC_LOG 0
+#define RILC_LOG 1
 
 #if RILC_LOG
     #define startRequest           sprintf(printBuf, "(")
@@ -151,6 +151,19 @@ typedef struct UserCallbackInfo {
     struct ril_event event;
     struct UserCallbackInfo *p_next;
 } UserCallbackInfo;
+
+/*
+typedef struct SocketListenParam {
+    RIL_SOCKET_ID socket_id;
+    int fdListen;
+    int fdCommand;
+    char* processName;
+    struct ril_event* commands_event;
+    struct ril_event* listen_event;
+    void (*processCommandsCallback)(int fd, short flags, void *param);
+    RecordStream *p_rs;
+} SocketListenParam;
+*/
 
 extern "C" const char * requestToString(int request);
 extern "C" const char * failCauseToString(RIL_Errno);
@@ -488,6 +501,8 @@ processCommandBuffer(void *buffer, size_t buflen, RIL_SOCKET_ID socket_id) {
     // status checked at end
     status = p.readInt32(&request);
     status = p.readInt32 (&token);
+
+    RLOGD("SOCKET %s REQUEST: %s length:%d", rilSocketIdToString(socket_id), requestToString(request), buflen);
 
 #if (SIM_COUNT >= 2)
     if (socket_id == RIL_SOCKET_2) {
@@ -4557,9 +4572,7 @@ RIL_onRequestComplete(RIL_Token t, RIL_Errno e, void *response, size_t responsel
     }
 #endif
 #endif
-#if VDBG
     RLOGD("RequestComplete, %s", rilSocketIdToString(socket_id));
-#endif
 
     if (pRI->local > 0) {
         // Locally issued command...void only!
@@ -4841,9 +4854,7 @@ void RIL_onUnsolicitedResponse(int unsolResponse, const void *data,
         break;
     }
 
-#if VDBG
     RLOGI("%s UNSOLICITED: %s length:%d", rilSocketIdToString(soc_id), requestToString(unsolResponse), p.dataSize());
-#endif
     ret = sendResponse(p, soc_id);
     if (ret != 0 && unsolResponse == RIL_UNSOL_NITZ_TIME_RECEIVED) {
 
@@ -5103,6 +5114,7 @@ requestToString(int request) {
         case RIL_REQUEST_IMS_SEND_SMS: return "IMS_SEND_SMS";
         case RIL_REQUEST_SIM_TRANSMIT_APDU_BASIC: return "SIM_TRANSMIT_APDU_BASIC";
         case RIL_REQUEST_SIM_OPEN_CHANNEL: return "SIM_OPEN_CHANNEL";
+        case RIL_REQUEST_SIM_OPEN_CHANNEL_WITH_P2: return "SIM_OPEN_CHANNEL_WITH_P2";
         case RIL_REQUEST_SIM_CLOSE_CHANNEL: return "SIM_CLOSE_CHANNEL";
         case RIL_REQUEST_SIM_TRANSMIT_APDU_CHANNEL: return "SIM_TRANSMIT_APDU_CHANNEL";
         case RIL_REQUEST_GET_RADIO_CAPABILITY: return "RIL_REQUEST_GET_RADIO_CAPABILITY";
@@ -5160,6 +5172,7 @@ requestToString(int request) {
         case RIL_UNSOL_ON_SS: return "UNSOL_ON_SS";
         case RIL_UNSOL_STK_CC_ALPHA_NOTIFY: return "UNSOL_STK_CC_ALPHA_NOTIFY";
         case RIL_REQUEST_SHUTDOWN: return "SHUTDOWN";
+        case RIL_REQUEST_SIM_GET_ATR: return "SIM_GET_ATR";
         default: return "<unknown request>";
     }
 }

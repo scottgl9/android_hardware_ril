@@ -102,7 +102,7 @@ typedef enum {
                                                    illegal SIM or ME */
     RIL_E_MISSING_RESOURCE = 16,                /* no logical channel available */
     RIL_E_NO_SUCH_ELEMENT = 17,                  /* application not found on SIM */
-    RIL_E_DIAL_MODIFIED_TO_USSD = 18,           /* DIAL request modified to USSD */
+    RIL_E_INVALID_PARAMETER = 18,
     RIL_E_DIAL_MODIFIED_TO_SS = 19,             /* DIAL request modified to SS */
     RIL_E_DIAL_MODIFIED_TO_DIAL = 20,           /* DIAL request modified to DIAL with different
                                                    data */
@@ -114,6 +114,7 @@ typedef enum {
     RIL_E_SS_MODIFIED_TO_USSD = 25,             /* SS request modified to USSD */
     RIL_E_SUBSCRIPTION_NOT_SUPPORTED = 26,      /* Subscription not supported by RIL */
     RIL_E_SS_MODIFIED_TO_SS = 27,               /* SS request modified to different SS request */
+    RIL_E_DIAL_MODIFIED_TO_USSD = 28,           /* DIAL request modified to USSD */
     RIL_E_LCE_NOT_SUPPORTED = 36                /* LCE service not supported(36 in RILConstants.java) */
 
 
@@ -4359,6 +4360,42 @@ typedef struct {
  *  GENERIC_FAILURE
  */
 #define RIL_REQUEST_SHUTDOWN 129
+
+/**
+ * RIL_REQUEST_SIM_GET_ATR
+ *
+ * Retrieves the ATR from the UICC.
+ *
+ * "data" is null
+ * "response" is const char * to the ATR.
+ *
+ * Valid errors:
+ *  SUCCESS
+ *  GENERIC_FAILURE
+ */
+#define RIL_REQUEST_SIM_GET_ATR 136
+
+/**
+ * RIL_REQUEST_SIM_OPEN_CHANNEL
+ *
+ * Open a new logical channel and select the given application.
+ *
+ * "data" is const char * and set to AID value, See ETSI 102.221 and 101.220.
+ * "p2" is the p2 byte to set
+ *
+ * "response" is int *
+ * ((int *)data)[0] contains the session id of the logical channel.
+ * ((int *)data)[1] onwards may optionally contain the select response for the
+ *     open channel command with one byte per integer.
+ *
+ * Valid errors:
+ *  SUCCESS
+ *  RADIO_NOT_AVAILABLE
+ *  GENERIC_FAILURE
+ *  MISSING_RESOURCE
+ *  NO_SUCH_ELEMENT
+ */
+#define RIL_REQUEST_SIM_OPEN_CHANNEL_WITH_P2 137
 
 /**
  * RIL_REQUEST_GET_RADIO_CAPABILITY

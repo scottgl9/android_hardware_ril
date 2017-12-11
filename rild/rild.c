@@ -43,7 +43,8 @@
 #define MAX_LIB_ARGS        16
 #define MAX_CAP_NUM         (CAP_TO_INDEX(CAP_LAST_CAP) + 1)
 
-static void usage(const char *argv0) {
+static void usage(const char *argv0)
+{
     fprintf(stderr, "Usage: %s -l <ril impl library> [-- <args for impl library>]\n", argv0);
     exit(EXIT_FAILURE);
 }
@@ -81,7 +82,8 @@ static struct RIL_Env s_rilEnv = {
 
 extern void RIL_startEventLoop();
 
-static int make_argv(char * args, char ** argv) {
+static int make_argv(char * args, char ** argv)
+{
     // Note: reserve argv[0]
     int count = 1;
     char * tok;
@@ -127,14 +129,7 @@ void switchUser() {
         exit(EXIT_FAILURE);
     }
 
-    /*
-     * Debuggable build only:
-     * Set DUMPABLE that was cleared by setuid() to have tombstone on RIL crash
-     */
-    property_get("ro.debuggable", debuggable, "0");
-    if (strcmp(debuggable, "1") == 0) {
-        prctl(PR_SET_DUMPABLE, 1, 0, 0, 0);
-    }
+    prctl(PR_SET_DUMPABLE, 1, 0, 0, 0);
 }
 
 int main(int argc, char **argv) {

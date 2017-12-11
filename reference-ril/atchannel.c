@@ -42,7 +42,7 @@
 
 #define NUM_ELEMS(x) (sizeof(x)/sizeof(x[0]))
 
-#define MAX_AT_RESPONSE (8 * 1024)
+#define MAX_AT_RESPONSE (8 * 0xFFFF)
 #define HANDSHAKE_RETRY_COUNT 8
 #define HANDSHAKE_TIMEOUT_MSEC 250
 
